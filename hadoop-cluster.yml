@@ -1,0 +1,174 @@
+# ============================================================
+# H8S-DP: Hadoop/YARN 독립 실행형 클러스터 (External Cluster)
+# ============================================================
+# 이 파일은 스토리지/연산 레이어만 포함하며,
+# 오케스트레이션(Airflow)은 Kubernetes에 별도 배포됩니다.
+#
+# 사용법:
+#   docker compose -f hadoop-cluster.yml up -d
+# ============================================================
+
+networks:
+  finops-network:
+    driver: bridge
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:
+  postgres_data: 
+
+services:
+  # 0. PostgreSQL Metadata Database (Airflow 메타데이터 DB)
+  #    K8s의 Airflow가 원격으로 이 DB에 연결합니다.
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - finops-network
+
+  # 1. HDFS NameNode
+  namenode:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop-java11
+      args:
+        - BASE_IMAGE=bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java11
+    container_name: namenode
+    restart: always
+    ports:
+      - "9870:9870"
+      - "9820:9820"
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=finops_cluster
+    env_file:
+      - ./hadoop.env
+    networks:
+      - finops-network
+
+  datanode:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop-java11
+      args:
+        - BASE_IMAGE=bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java11
+    container_name: datanode
+    restart: always
+    ports:
+      - "9864:9864"
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    environment:
+      - SERVICE_PRECONDITION=namenode:9820
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - namenode
+    networks:
+      - finops-network
+
+  # YARN Resource Manager
+  resourcemanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop-java11
+      args:
+        - BASE_IMAGE=bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java11
+    container_name: resourcemanager
+    restart: always
+    ports:
+      - "8088:8088"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9820 datanode:9864
+      - YARN_CONF_yarn_resourcemanager_scheduler_class=org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler
+      - YARN_CONF_yarn_scheduler_minimum___allocation___mb=1024
+      - YARN_CONF_yarn_scheduler_maximum___allocation___mb=4096
+    env_file:
+      - ./hadoop.env
+    networks:
+      - finops-network
+
+  # YARN Node Manager
+  nodemanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop-java11
+      args:
+        - BASE_IMAGE=bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java11
+    container_name: nodemanager
+    restart: always
+    ports:
+      - "8042:8042"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9820 datanode:9864 resourcemanager:8088
+      - YARN_CONF_yarn_nodemanager_resource_memory___mb=4096
+      - YARN_CONF_yarn_scheduler_minimum___allocation___mb=1024
+      - YARN_CONF_yarn_scheduler_maximum___allocation___mb=4096
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - resourcemanager
+    networks:
+      - finops-network
+
+  # 2. HDFS Directory Setup
+  hdfs-directory-setup:
+    build:
+      context: .
+      dockerfile: Dockerfile.hadoop-java11
+      args:
+        - BASE_IMAGE=bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java11
+    container_name: hdfs-directory-setup
+    depends_on:
+      - namenode
+    networks:
+      - finops-network
+    env_file:
+      - ./hadoop.env
+    volumes:
+      - ./dags/setup_hdfs.sh:/setup_hdfs.sh
+      - ./transactions_10k.csv:/transactions_10k.csv
+    command: ["/bin/bash", "/setup_hdfs.sh"]
+
+  # 3. Apache Livy Server (K8s Airflow ↔ YARN 원격 Spark Job 제출 브릿지)
+  livy-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.livy
+    image: livy-server:0.7.1-hdp
+    container_name: livy-server
+    restart: always
+    ports:
+      - "8998:8998"   # Livy REST API (K8s에서 접근)
+    environment:
+      - SPARK_HOME=/opt/spark
+      - HADOOP_CONF_DIR=/opt/livy/conf
+      - LIVY_CONF_DIR=/opt/livy/conf
+      - SERVICE_PRECONDITION=namenode:9820 resourcemanager:8088
+    env_file:
+      - ./hadoop.env
+    depends_on:
+      - resourcemanager
+      - namenode
+    networks:
+      - finops-network
+    volumes:
+      - ./livy-conf/livy.conf:/opt/livy/conf/livy.conf
+      - ./hadoop-conf/core-site.xml:/opt/livy/conf/core-site.xml
+      - ./hadoop-conf/hdfs-site.xml:/opt/livy/conf/hdfs-site.xml
+      - ./hadoop-conf/yarn-site.xml:/opt/livy/conf/yarn-site.xml
