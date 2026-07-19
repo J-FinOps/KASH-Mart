@@ -1,0 +1,84 @@
+# Apache Livy Server for Hybrid Data Pipeline (H8S-DP)
+# Bridge between K8s Airflow and external Docker YARN/HDFS cluster
+
+FROM bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java11 AS base
+
+USER root
+
+# Fix APT sources — Debian 9 Stretch is EOL
+RUN sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list && \
+    sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+    sed -i '/stretch-updates/d' /etc/apt/sources.list
+
+# Install Python 3.5 system packages
+RUN apt-get update -o Acquire::Check-Valid-Until=false && \
+    apt-get install -y -o Acquire::Check-Valid-Until=false \
+    python3 python3-pip curl unzip wget && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    ln -s /usr/bin/python3 /usr/bin/python
+
+# -------------------------------------------------------------------
+# Install Python 3.9 via Miniconda (for PySpark 3.4.1 compatibility)
+# -------------------------------------------------------------------
+ENV PYTHON39_PREFIX=/opt/conda
+
+RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-py39_24.1.2-0-Linux-x86_64.sh && \
+    bash Miniconda3-py39_24.1.2-0-Linux-x86_64.sh -b -p ${PYTHON39_PREFIX} && \
+    rm Miniconda3-py39_24.1.2-0-Linux-x86_64.sh && \
+    echo "Python 3.9 installed: $(${PYTHON39_PREFIX}/bin/python3.9 --version)"
+
+# -------------------------------------------------------------------
+# Stage 1: Install Apache Spark 3.4.1 (matching Airflow's PySpark)
+# -------------------------------------------------------------------
+ENV SPARK_VERSION=3.4.1
+ENV HADOOP_VERSION=3
+ENV SPARK_HOME=/opt/spark
+
+COPY spark-3.4.1-bin-hadoop3.tgz /tmp/
+
+RUN tar -xz -C /opt/ -f /tmp/spark-3.4.1-bin-hadoop3.tgz && \
+    mv /opt/spark-3.4.1-bin-hadoop3 ${SPARK_HOME} && \
+    rm /tmp/spark-3.4.1-bin-hadoop3.tgz
+
+# -------------------------------------------------------------------
+# Stage 2: Install Apache Livy 0.7.1 (local archive)
+# -------------------------------------------------------------------
+ENV LIVY_VERSION=0.7.1-incubating
+ENV LIVY_HOME=/opt/livy
+
+COPY apache-livy-0.7.1-incubating-bin.zip /tmp/
+
+RUN unzip -q /tmp/apache-livy-${LIVY_VERSION}-bin.zip -d /opt/ && \
+    mv /opt/apache-livy-${LIVY_VERSION}-bin ${LIVY_HOME} && \
+    rm /tmp/apache-livy-${LIVY_VERSION}-bin.zip
+
+# -------------------------------------------------------------------
+# Stage 3: Configure Livy
+# -------------------------------------------------------------------
+# Copy Hadoop configuration so Livy can talk to YARN/HDFS
+COPY hadoop-conf/core-site.xml ${LIVY_HOME}/conf/
+COPY hadoop-conf/hdfs-site.xml ${LIVY_HOME}/conf/
+COPY hadoop-conf/yarn-site.xml ${LIVY_HOME}/conf/
+COPY livy-conf/livy.conf ${LIVY_HOME}/conf/livy.conf
+
+# Copy Spark configuration for YARN
+RUN cp ${SPARK_HOME}/conf/spark-defaults.conf.template ${SPARK_HOME}/conf/spark-defaults.conf && \
+    echo "spark.master yarn" >> ${SPARK_HOME}/conf/spark-defaults.conf && \
+    echo "spark.submit.deployMode client" >> ${SPARK_HOME}/conf/spark-defaults.conf
+
+# Create Livy log directory
+RUN mkdir -p ${LIVY_HOME}/logs
+
+# Environment variables
+ENV PYSPARK_PYTHON=/opt/conda/bin/python3.9
+ENV SPARK_HOME=/opt/spark
+ENV HADOOP_CONF_DIR=/opt/livy/conf
+ENV LIVY_CONF_DIR=${LIVY_HOME}/conf
+ENV PATH=$PATH:${SPARK_HOME}/bin:${LIVY_HOME}/bin:/opt/conda/bin
+
+WORKDIR ${LIVY_HOME}
+
+EXPOSE 8998
+
+CMD ["bin/livy-server"]
