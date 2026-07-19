@@ -55,7 +55,7 @@ def accounting_fds_hybrid_dag():
             "spark.driver.memory": "1024m",
         },
         name="fds_{{ ds_nodash }}",
-        polling_interval=0,
+        polling_interval=30,
     )
 
     @task(task_id='verify_fds_output')
