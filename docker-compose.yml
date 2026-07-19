@@ -177,7 +177,7 @@ services:
       - ./exported_data:/opt/airflow/exported_data
     environment:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__EXECUTOR=KubernetesExecutor
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - HADOOP_CONF_DIR=/opt/hadoop/conf
     entrypoint: [ "/entrypoint" ]
@@ -203,7 +203,7 @@ services:
       - ./exported_data:/opt/airflow/exported_data
     environment:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-      - AIRFLOW__CORE__EXECUTOR=KubernetesExecutor
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
       - HADOOP_CONF_DIR=/opt/hadoop/conf
     entrypoint: [ "/entrypoint" ]
@@ -215,3 +215,4 @@ services:
         condition: service_completed_successfully
     networks:
       - finops-network
+
