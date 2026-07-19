@@ -75,8 +75,13 @@ def accounting_fds_hybrid_dag():
 
     @task(task_id='export_to_local')
     def export_to_local(**context):
+        import shutil
         ds = context["ds"]
+        dag_run = context.get("dag_run")
+        if dag_run and dag_run.conf and dag_run.conf.get("logical_date"):
+            ds = dag_run.conf["logical_date"]
         hdfs_dir = f"/user/airflow/warehouse/fact_accounting/거래일자={ds}"
+        local_dir = f"/opt/airflow/exported_data/fact_accounting/거래일자={ds}"
 
         list_url = f"{WEBHDFS_BASE}{hdfs_dir}?op=LISTSTATUS"
         resp = requests.get(list_url, allow_redirects=True, timeout=30)
@@ -86,8 +91,27 @@ def accounting_fds_hybrid_dag():
             return f"skipped:{ds}"
 
         resp.raise_for_status()
-        print(f"Export task registered for partition {ds}")
-        return f"exported:{ds}"
+        files = resp.json().get("FileStatuses", {}).get("FileStatus", [])
+
+        parquet_files = [f for f in files if f["pathSuffix"].endswith(".parquet")]
+        if not parquet_files:
+            print(f"No parquet files in partition {ds} — skipping export")
+            return f"empty:{ds}"
+
+        os.makedirs(local_dir, exist_ok=True)
+
+        for f in parquet_files:
+            fname = f["pathSuffix"]
+            local_path = os.path.join(local_dir, fname)
+            download_url = f"{WEBHDFS_BASE}{hdfs_dir}/{fname}?op=OPEN"
+            with requests.get(download_url, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(local_path, "wb") as out:
+                    shutil.copyfileobj(r.raw, out)
+            print(f"  downloaded: {fname}")
+
+        print(f"Exported {len(parquet_files)} files to {local_dir}")
+        return local_dir
 
     export = export_to_local()
 
