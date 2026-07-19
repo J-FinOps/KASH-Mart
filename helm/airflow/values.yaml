@@ -1,0 +1,140 @@
+# ============================================================
+# H8S-DP: Airflow Helm Chart Values
+# KubernetesExecutor 기반, 외부 Docker Hadoop/YARN 연동
+# ============================================================
+
+executor: "KubernetesExecutor"
+
+# Static API secret key — prevents token invalidation on pod restarts
+apiSecretKey: "h8sdp-static-api-key-2026"
+webserverSecretKey: "h8sdp-static-ws-key-2026"
+
+# -------------------------------------------------------------------
+# Custom Airflow Image (모든 컴포넌트에 Livy/HDFS Provider 포함)
+# -------------------------------------------------------------------
+images:
+  airflow:
+    repository: airflow-h8sdp
+    tag: "3.2.2"
+    pullPolicy: IfNotPresent
+
+# -------------------------------------------------------------------
+# Airflow Config
+# -------------------------------------------------------------------
+config:
+  core:
+    load_examples: "False"
+    dags_are_paused_at_creation: "True"
+    dag_discovery_safe_mode: "True"
+  kubernetes:
+    delete_worker_pods: "False"
+    worker_container_repository: "airflow-h8sdp"
+    worker_container_tag: "3.2.2"
+    namespace: "airflow"
+    run_as_user: "50000"
+    dags_in_image: "False"
+
+# -------------------------------------------------------------------
+# External PostgreSQL Database (Docker 호스트에서 실행 중)
+# -------------------------------------------------------------------
+postgresql:
+  enabled: false
+
+data:
+  metadataConnection:
+    user: airflow
+    pass: airflow
+    protocol: postgresql
+    host: 172.18.0.1
+    port: 5432
+    db: airflow
+    sslmode: disable
+
+# -------------------------------------------------------------------
+# API Server (Web UI + REST API, NodePort로 외부 접근)
+# -------------------------------------------------------------------
+apiServer:
+  service:
+    type: NodePort
+    ports:
+      - name: airflow-ui
+        port: 8080
+        nodePort: 30080
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+# -------------------------------------------------------------------
+# Scheduler
+# -------------------------------------------------------------------
+scheduler:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+
+# -------------------------------------------------------------------
+# DAG 배포 방식 (GitSync 비활성화, ConfigMap 기반)
+# -------------------------------------------------------------------
+dags:
+  gitSync:
+    enabled: false
+  persistence:
+    enabled: false
+
+# -------------------------------------------------------------------
+# Logs
+# -------------------------------------------------------------------
+logs:
+  persistence:
+    enabled: false
+
+# -------------------------------------------------------------------
+# 공통 환경 변수 (Scheduler, Webserver, Worker Pods)
+# -------------------------------------------------------------------
+env:
+  # Livy / WebHDFS Connections (Airflow가 자동 인식)
+  - name: AIRFLOW_CONN_LIVY_DEFAULT
+    value: "http://@172.18.0.1:8998"
+  - name: AIRFLOW_CONN_WEBHDFS_DEFAULT
+    value: "http://@172.18.0.1:9870"
+  # Hadoop/YARN/Livy 연동
+  - name: DOCKER_HOST_IP
+    value: "172.18.0.1"
+  - name: HADOOP_CONF_DIR
+    value: "/opt/hadoop/conf"
+  - name: JAVA_HOME
+    value: "/usr/lib/jvm/java-17-openjdk-amd64"
+
+# -------------------------------------------------------------------
+# Extra Volume Mounts (Hadoop Config + DAGs via ConfigMap)
+# -------------------------------------------------------------------
+volumes:
+  - name: hadoop-conf
+    configMap:
+      name: hadoop-config
+  - name: dags
+    configMap:
+      name: airflow-dags
+  - name: exported-data
+    hostPath:
+      path: /opt/airflow-exported
+      type: DirectoryOrCreate
+
+volumeMounts:
+  - name: hadoop-conf
+    mountPath: /opt/hadoop/conf
+    readOnly: true
+  - name: dags
+    mountPath: /opt/airflow/dags
+    readOnly: true
+  - name: exported-data
+    mountPath: /opt/airflow/exported_data
