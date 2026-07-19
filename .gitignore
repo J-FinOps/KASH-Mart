@@ -1,3 +1,4 @@
+01_B/
 logs/
 .env
 hadoop.env
@@ -6,5 +7,11 @@ hadoop.env
 .idea/
 .vscode/
 *.txt
+*.csv
 __pycache__/
 exported_data/
+db/*.db
+*.tgz
+*.zip
+*.log
+*.pyc
