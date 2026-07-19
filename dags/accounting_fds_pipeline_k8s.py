@@ -48,13 +48,13 @@ def accounting_fds_hybrid_dag():
             "--output",
             "hdfs://" + DOCKER_HOST_IP + ":9820/user/airflow/warehouse/fact_accounting",
             "--date",
-            "{{ ds }}",
+            "{{ dag_run.conf.get('logical_date', ds) }}",
         ],
         conf={
             "spark.executor.memory": "1024m",
             "spark.driver.memory": "1024m",
         },
-        name="fds_{{ ds_nodash }}",
+        name="fds_{{ dag_run.conf.get('logical_date', ds_nodash) }}",
         polling_interval=30,
     )
 
