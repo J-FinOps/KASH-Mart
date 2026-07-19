@@ -104,7 +104,16 @@ def accounting_fds_hybrid_dag():
             fname = f["pathSuffix"]
             local_path = os.path.join(local_dir, fname)
             download_url = f"{WEBHDFS_BASE}{hdfs_dir}/{fname}?op=OPEN"
-            with requests.get(download_url, stream=True, timeout=60) as r:
+            with requests.get(download_url, stream=True, timeout=60, allow_redirects=False) as resp:
+                if resp.status_code in (307, 302):
+                    from urllib.parse import urlparse, urlunparse
+                    redirect_url = resp.headers.get("Location", "")
+                    parsed = urlparse(redirect_url)
+                    new_netloc = f"{DOCKER_HOST_IP}:{parsed.port or 9864}"
+                    redirect_url = urlunparse(parsed._replace(netloc=new_netloc))
+                    r = requests.get(redirect_url, stream=True, timeout=60)
+                else:
+                    r = resp
                 r.raise_for_status()
                 with open(local_path, "wb") as out:
                     shutil.copyfileobj(r.raw, out)
